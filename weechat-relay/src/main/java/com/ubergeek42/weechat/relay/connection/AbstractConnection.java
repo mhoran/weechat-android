@@ -5,11 +5,15 @@ import com.ubergeek42.weechat.relay.RelayConnectionHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.Socket;
 import java.net.SocketException;
+import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 
 public abstract class AbstractConnection implements IConnection {
@@ -144,6 +148,70 @@ public abstract class AbstractConnection implements IConnection {
     public void notifyHandlersOfError(Exception e) {
         for (RelayConnectionHandler rch : connectionHandlers) {
             rch.onError(e.getMessage(), e);
+        }
+    }
+
+    /* These definitions are only valid on Linux */
+    private static final int IPPROTO_TCP = 6;
+    private static final int TCP_KEEPIDLE = 4;
+    private static final int TCP_KEEPINTVL = 5;
+    private static final int TCP_KEEPCNT = 6;
+
+    private static Object os;
+    private static Method setsockoptInt;
+
+    static {
+        try {
+            String osName =  System.getProperty("os.name");
+            if (osName.equals("Linux")) {
+                Class libcore = Class.forName("libcore.io.Libcore");
+                Field osField = libcore.getDeclaredField("os");
+
+                os = osField.get(null);
+                setsockoptInt = osField.getType().getDeclaredMethod("setsockoptInt", FileDescriptor.class, int.class, int.class, int.class);
+            } else {
+                logger.warn("OS={}", osName);
+            }
+        } catch (Throwable t) {
+            logger.warn("Unable to get setsockoptInt()", t);
+        }
+    }
+
+    private static FileDescriptor getFileDescriptor(SocketChannel channel) {
+        try {
+            Method getFileDescriptor = channel.getClass().getDeclaredMethod("getFD");
+            return (FileDescriptor)getFileDescriptor.invoke(channel);
+
+        } catch (Throwable t) {
+            logger.warn("Unable to get FileDescriptor using getFD()", t);
+        }
+
+        logger.warn("Unable to get FileDescriptor for {}", channel.getClass());
+        return null;
+    }
+
+    protected void configureKeepAlive(SocketChannel channel) {
+        try {
+            sock.setKeepAlive(true);
+        } catch (SocketException e) {
+            logger.error("Unable to enable TCP keepalive on socket {}", sock, e);
+            return;
+        }
+
+        if (setsockoptInt == null)
+            return;
+
+        FileDescriptor fd = getFileDescriptor(channel);
+        if (fd == null)
+            return;
+
+        try {
+            setsockoptInt.invoke(os, fd, IPPROTO_TCP, TCP_KEEPIDLE, 60);
+            setsockoptInt.invoke(os, fd, IPPROTO_TCP, TCP_KEEPINTVL, 15);
+            setsockoptInt.invoke(os, fd, IPPROTO_TCP, TCP_KEEPCNT, 12);
+            logger.info("Configured TCP keepalive on socket {}", sock);
+        } catch (Throwable t) {
+            logger.error("Unable to configure TCP keepalive on socket {}", sock, t);
         }
     }
 }

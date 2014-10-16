@@ -7,7 +7,6 @@ import java.security.KeyStore;
 import java.security.SecureRandom;
 
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManagerFactory;
 
@@ -43,6 +42,7 @@ public class SSLConnection extends AbstractConnection {
                 channel.connect(new InetSocketAddress(server, port));
                 SSLSocketFactory socketFactory = sslContext.getSocketFactory();
                 sock = socketFactory.createSocket(channel.socket(), server, port, true);
+                configureKeepAlive(channel);
 
                 out_stream = sock.getOutputStream();
                 in_stream = sock.getInputStream();
